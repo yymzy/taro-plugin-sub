@@ -1,5 +1,6 @@
-export type PagePathOptions = {
-    outputPath: string,
-    pagePath: string,
-    suffix: string
+export type SubPackages = {
+    root: string,
+    outputRoot: string,
+    name?: string,
+    pages: string[]
 }

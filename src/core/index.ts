@@ -1,4 +1,4 @@
-import { mvSubPackages, } from "../utils/";
+import { mvSubPackages } from "../utils/";
 
 export default (ctx, opts) => {
     ctx.onBuildFinish(() => {
