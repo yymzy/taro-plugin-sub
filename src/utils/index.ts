@@ -2,6 +2,48 @@ import path from "path";
 
 /**
  * 
+ * @description 更新配置，分包注入chunk
+ * @param ctx 
+ */
+export function updateConfig(ctx) {
+  ctx.initialConfig.mini.addChunkPages = (pages, pagesNames) => {
+    console.log("pagesNames", pagesNames);
+  }
+}
+
+/**
+ * 
+ * @description 自定义chunks
+ * @param ctx 
+ * @param params1
+ */
+export function splitChunks(ctx, { chain, webpack }) {
+
+  console.log("webpack", webpack);
+
+  chain.merge({
+    optimization: {
+      splitChunks: {
+        cacheGroups: {
+          sub: {
+            name: "pages-0/sub",
+            minChunks: 2,
+            test: (module, chunks) => {
+              // console.log(module);
+              return /\/src\//.test(
+                module.resource
+              );
+            },
+            priority: 200
+          }
+        }
+      }
+    }
+  });
+}
+
+/**
+ * 
  * @description 读取app.json配置项
  * @param ctx 
  * @returns 
@@ -38,7 +80,7 @@ export function mvSubPackages(ctx) {
     const { TARO_ENV, PLATFORM_ENV = TARO_ENV } = process.env;
     const { outputPath } = ctx.paths;
     const fileType = fileTypeMap[PLATFORM_ENV];
-    if (!fileType) return;
+    if (!fileType || !subPackages) return;
 
     const movePaths = []; // 分包列表
     const preloadRuleMap = {}; // 预下载配置
