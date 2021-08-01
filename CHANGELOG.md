@@ -1,3 +1,5 @@
+## [0.0.1-alpha.3](https://yymzy.github.com/yymzy/taro-plugin-sub/compare/v0.0.1-alpha.2...v0.0.1-alpha.3) (2021-08-01)
+
 ## [0.0.1-alpha.2](https://new.github.com/yymzy/taro-plugin-sub/compare/v0.0.1-alpha.1...v0.0.1-alpha.2) (2021-07-29)
 
 ## [0.0.1-alpha.1](https://new.github.com/yymzy/taro-plugin-sub/compare/v0.0.1-alpha.0...v0.0.1-alpha.1) (2021-07-29)
