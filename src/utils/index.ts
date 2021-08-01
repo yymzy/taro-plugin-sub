@@ -109,13 +109,16 @@ function getComponentOutputPath(ctx, sourcePathExt, comRelativePath) {
  * @param parents 
  * @param subRoots 
  */
-function loopFindSubRoots(parents, subRoots) {
+function loopFindSubRoots(parents, subRoots, mainRoot, count = 0) {
   Object.keys(parents).forEach(sourcePathExt => {
-    const item = parents[sourcePathExt];
-    if (item.parents) {
-      loopFindSubRoots(item.parents, subRoots);
-    } else if (!subRoots.includes(item)) {
-      subRoots.push(item);
+    const item = count >= 5 ? mainRoot : parents[sourcePathExt] || {};
+    if (typeof item === 'string') {
+      !subRoots.includes(item) && subRoots.push(item);
+      return;
+    }
+    const { parents: itemParent } = item
+    if (itemParent) {
+      loopFindSubRoots(itemParent, subRoots, 1 + count);
     }
   });
 }
@@ -141,34 +144,42 @@ export function modifyBuildTempFileContent(ctx, tempFiles) {
     // 收集对应的自定义组件信息
     const { componentMap } = ctx.subPackagesMap;
     const mainRoot = "main"; // 主包
-    const parentMap = {}
+    const parentMap = {};
     Object.keys(tempFiles).forEach(sourcePathExt => {
       const { type, config } = tempFiles[sourcePathExt] || {};
       const { usingComponents } = config || {};
       if (!usingComponents || type === 'ENTRY') return;
+
+      const subRoot = subRootMap[sourcePathExt] || mainRoot;
+      const parentAbsolutePath = getComponentOutputPath(ctx, sourcePathExt, "./");
+
       Object.keys(usingComponents).forEach(name => {
         const relativePath = usingComponents[name];
         const absolutePath = getComponentOutputPath(ctx, sourcePathExt, relativePath);
-        const parentAbsolutePath = getComponentOutputPath(ctx, sourcePathExt, "./");
         let currentCom = parentMap[absolutePath];
         if (!currentCom) {
           currentCom = parentMap[absolutePath] = {
-            parents: {}
+            parents: []
           }
         }
-        currentCom.parents[parentAbsolutePath] = type === 'PAGE'
-          ? (subRootMap[sourcePathExt] || mainRoot)
-          : parentMap[parentAbsolutePath];
+        currentCom.parents.push(parentAbsolutePath);
+        if (type === 'PAGE') {
+          currentCom.subRoot = subRoot;
+        }
+        // currentCom.parents[parentAbsolutePath] = type === 'PAGE'
+        //   ? (subRootMap[sourcePathExt] || mainRoot)
+        //   : parentMap[parentAbsolutePath];
       });
     });
-
+    console.log("parentMap", parentMap)
     Object.keys(parentMap).forEach(sourcePathExt => {
       if (!componentMap[sourcePathExt]) {
         componentMap[sourcePathExt] = {
           subRoots: []
         }
       }
-      loopFindSubRoots(parentMap[sourcePathExt].parents, componentMap[sourcePathExt].subRoots);
+      return;
+      loopFindSubRoots(parentMap[sourcePathExt].parents, componentMap[sourcePathExt].subRoots, mainRoot);
     })
 
     // 需要移回的自定义组件 
@@ -177,9 +188,11 @@ export function modifyBuildTempFileContent(ctx, tempFiles) {
     const componentMovePaths = [];
     Object
       .keys(componentMap).forEach(key => {
-        const move = !!getSubRoot(componentMap[key].subRoots, mainRoot);
+        const { subRoots = [] } = componentMap[key];
+        if (subRoots.length === 0) return;
+        const move = !!getSubRoot(subRoots, mainRoot);
         componentMap[key].move = move;
-        const paths = [key, getComponentMovePath(ctx, key, componentMap[key].subRoots[0])];
+        const paths = [key, getComponentMovePath(ctx, key, subRoots[0])];
         move ? componentMovePaths.push(paths) : componentBackPaths.push(paths.reverse());
       });
     ctx.subPackagesMap.movePaths = [...movePagePath, ...componentMovePaths];
