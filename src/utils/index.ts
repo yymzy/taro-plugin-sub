@@ -1,6 +1,8 @@
 import path from "path";
 import fs from "fs";
+import { createSubRoot } from "taro-plugin-sub-tools";
 
+const MAIN_ROOT = "main"; // 主包
 /**
  * 
  * @description 更新配置，分包注入chunk
@@ -43,9 +45,9 @@ function formatSubPackages(ctx, subPackages) {
   const movePaths = []; // 分包列表
   const preloadRuleMap = {}; // 预下载配置
   const subRootMap = {}; // 分包配置
-  const subPackagesFormatted = subPackages.map(({ preloadRule, network, root: sourceRoot, pages, outputRoot = "auto", ...subItem }, index) => {
+  const subPackagesFormatted = subPackages.map(({ preloadRule, network, root: sourceRoot, pages, outputRoot, ...subItem }, index) => {
     // 保证分包只有一级
-    const subRoot = (outputRoot === 'auto' ? `${sourceRoot}-${index}` : outputRoot).replace(/\//g, "-");
+    const subRoot = createSubRoot({ outputRoot, sourceRoot }, index);
     // 收集需要移动的分包列表
     const pagesFormatted = pages.map(item => {
       const page = `${sourceRoot}/${item}`;
@@ -106,23 +108,40 @@ function getComponentOutputPath(ctx, sourcePathExt, comRelativePath) {
 /**
  * 
  * @description 循环查找各组件所属分包
- * @param parents 
- * @param subRoots 
+ * @param componentMapPreset
  */
-function loopFindSubRoots(parents, subRoots, mainRoot, count = 0) {
-  Object.keys(parents).forEach(sourcePathExt => {
-    const item = count >= 5 ? mainRoot : parents[sourcePathExt] || {};
-    if (typeof item === 'string') {
-      !subRoots.includes(item) && subRoots.push(item);
-      return;
+function loopFindSubRoots(componentMapPreset, sourcePathExt) {
+  const { subRoots, parents } = componentMapPreset[sourcePathExt];
+  const subRootsLength = subRoots ? subRoots.length : 0;
+  if (subRootsLength && (subRoots.includes(MAIN_ROOT))) {
+    // 1、多个分包引用，则放入主包：subRootsLength > 1 || subRoots[0] === mainRoot；
+    // 2、放入各个分包：subRoots.includes(MAIN_ROOT)； 
+    return subRoots;
+  }
+  if (parents && parents.length > 0) {
+    for (let i, len = parents.length; i < len; i++) {
+      return loopFindSubRoots(componentMapPreset, parents[i])
     }
-    const { parents: itemParent } = item
-    if (itemParent) {
-      loopFindSubRoots(itemParent, subRoots, 1 + count);
-    }
-  });
+  }
+  return null;
 }
 
+/**
+ * 
+ * @description 注入subRoots
+ */
+function mergeSubRoots(...arg) {
+  const subRoots = [];
+  arg.forEach(item => {
+    if (!item) return;
+    item.forEach(subRoot => {
+      if (!subRoots.includes(subRoot)) {
+        subRoots.push(subRoot);
+      }
+    })
+  });
+  return subRoots.length ? subRoots : null
+}
 /**
  * 
  * @description 单独引入到分包内的自定义组件，保证此组件没有被其他分包或者页面引用，否则放入公共包
@@ -143,78 +162,93 @@ export function modifyBuildTempFileContent(ctx, tempFiles) {
   if (subRootMap) {
     // 收集对应的自定义组件信息
     const { componentMap } = ctx.subPackagesMap;
-    const mainRoot = "main"; // 主包
-    const parentMap = {};
+    const componentMapPreset = {};
     Object.keys(tempFiles).forEach(sourcePathExt => {
       const { type, config } = tempFiles[sourcePathExt] || {};
       const { usingComponents } = config || {};
       if (!usingComponents || type === 'ENTRY') return;
-
-      const subRoot = subRootMap[sourcePathExt] || mainRoot;
+      const subRoot = subRootMap[sourcePathExt] || MAIN_ROOT;
       const parentAbsolutePath = getComponentOutputPath(ctx, sourcePathExt, "./");
 
       Object.keys(usingComponents).forEach(name => {
         const relativePath = usingComponents[name];
         const absolutePath = getComponentOutputPath(ctx, sourcePathExt, relativePath);
-        let currentCom = parentMap[absolutePath];
+        let currentCom = componentMapPreset[absolutePath];
+        const parentCom = componentMapPreset[parentAbsolutePath];
         if (!currentCom) {
-          currentCom = parentMap[absolutePath] = {
+          currentCom = componentMapPreset[absolutePath] = {
             parents: []
           }
         }
-        currentCom.parents.push(parentAbsolutePath);
         if (type === 'PAGE') {
-          currentCom.subRoot = subRoot;
+          // 父级为页面组件直接注入subRoots
+          currentCom.subRoots = mergeSubRoots(currentCom.subRoots, [subRoot]);
+        } else {
+          const { subRoots: parentSubRoots } = parentCom || {};
+          if (parentSubRoots) {
+            currentCom.subRoots = mergeSubRoots(currentCom.subRoots, parentSubRoots);
+          } else {
+            // 其他组件push进去等待查询
+            currentCom.parents.push(parentAbsolutePath);
+          }
         }
-        // currentCom.parents[parentAbsolutePath] = type === 'PAGE'
-        //   ? (subRootMap[sourcePathExt] || mainRoot)
-        //   : parentMap[parentAbsolutePath];
       });
     });
-    console.log("parentMap", parentMap)
-    Object.keys(parentMap).forEach(sourcePathExt => {
-      if (!componentMap[sourcePathExt]) {
-        componentMap[sourcePathExt] = {
-          subRoots: []
-        }
-      }
-      return;
-      loopFindSubRoots(parentMap[sourcePathExt].parents, componentMap[sourcePathExt].subRoots, mainRoot);
-    })
 
-    // 需要移回的自定义组件 
-    const componentBackPaths = [];
-    // 将自定义组件移入移动的列表
-    const componentMovePaths = [];
-    Object
-      .keys(componentMap).forEach(key => {
-        const { subRoots = [] } = componentMap[key];
-        if (subRoots.length === 0) return;
-        const move = !!getSubRoot(subRoots, mainRoot);
-        componentMap[key].move = move;
-        const paths = [key, getComponentMovePath(ctx, key, subRoots[0])];
-        move ? componentMovePaths.push(paths) : componentBackPaths.push(paths.reverse());
-      });
+    // 收集subRoots
+    Object.keys(componentMapPreset).forEach(sourcePathExt => {
+      if (!componentMap[sourcePathExt]) {
+        componentMap[sourcePathExt] = {}
+      }
+      const subRoots = loopFindSubRoots(componentMapPreset, sourcePathExt);
+      if (subRoots) {
+        componentMap[sourcePathExt].subRoots = mergeSubRoots(componentMap[sourcePathExt].subRoots, subRoots)
+      }
+    });
+
+    const { componentBackPaths, componentMovePaths } = collectMovePaths(ctx, componentMap);
+
     ctx.subPackagesMap.movePaths = [...movePagePath, ...componentMovePaths];
     ctx.subPackagesMap.backComponentPaths = componentBackPaths;
   }
 }
 
-/**
- * 
- * @description 获取分包，注：必须是单一分包的
- * @param list 
- * @param mainRoot 
- * @returns 
- */
-function getSubRoot(list, mainRoot) {
-  const subRoot = list[0];
-  return list.length === 1 && subRoot !== mainRoot ? subRoot : ""
-}
-
 function getComponentMovePath(ctx, from, subRoot) {
   const { outputPath } = ctx.paths;
   return from.replace(outputPath, path.join(outputPath, subRoot));
+}
+
+/**
+ * 
+ * @description 收集移动路径，移出或者回退的路径
+ * @param ctx
+ * @param componentMap 
+ * @returns 
+ */
+function collectMovePaths(ctx, componentMap) {
+  // 需要移回的自定义组件 
+  const componentBackPaths = [];
+  // 将自定义组件移入移动的列表
+  const componentMovePaths = [];
+  Object
+    .keys(componentMap).forEach(key => {
+      const { subRoots } = componentMap[key];
+      if (!subRoots || subRoots.length === 0) return;
+      const move = !subRoots.includes(MAIN_ROOT);
+      componentMap[key].move = move;
+      // 可支持注入多个分包
+      const paths = subRoots
+        .filter(item => item !== MAIN_ROOT)
+        .map(item => ([key, getComponentMovePath(ctx, key, item)]));
+      move
+        ? componentMovePaths.push(...paths)
+        : componentBackPaths.push(...paths.map(item => ([...item].reverse())));
+    });
+
+  return {
+    componentMovePaths,
+    componentBackPaths
+  }
 }
 
 /**

@@ -1,6 +1,6 @@
 {
   "name": "taro-plugin-sub",
-  "version": "0.0.1-alpha.4",
+  "version": "0.0.1-alpha.5",
   "main": "dist/index.js",
   "types": "dist/types/index.d.ts",
   "files": [
@@ -39,7 +39,9 @@
     ],
     "*.{md}": "yarn prettier"
   },
-  "dependencies": {},
+  "dependencies": {
+    "taro-plugin-sub-tools": "0.0.1-alpha.2"
+  },
   "devDependencies": {
     "@rollup/plugin-alias": "^3.1.1",
     "@rollup/plugin-commonjs": "^13.0.0",
