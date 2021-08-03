@@ -23,13 +23,22 @@ export function updateConfig(ctx) {
 }
 
 /**
+ * 
+ * @description 获取文件后缀
+ * @returns 
+ */
+export function getFileType() {
+  const { TARO_ENV, PLATFORM_ENV = TARO_ENV } = process.env;
+  return fileTypeMap[PLATFORM_ENV];
+}
+
+/**
  *
  * 组合后缀
  * @param paths 
  */
 export function combiningSuffix(paths) {
-  const { TARO_ENV, PLATFORM_ENV = TARO_ENV } = process.env;
-  let fileType = fileTypeMap[PLATFORM_ENV];
+  let fileType = getFileType();
   const files = [];
   if (!fileType || !paths) return files;
   paths.forEach(([from, to]) => {
@@ -176,7 +185,7 @@ export function mergeSubRoots(...arg) {
 function getOraText(status, opts?) {
   const statusMap = {
     start: ["开始：", "yellow"],
-    succeed: ["成功：", "green"],
+    succeed: ["完成：", "green"],
     fail: ["失败：", "red"]
   }
   const { type = "move", isBack, message = "" } = opts || {};
@@ -186,7 +195,7 @@ function getOraText(status, opts?) {
       text = `移动文件${isBack ? "回(主" : "到(分"}包)`
       break;
     case "fix": // 修正组件引用路径
-      text = `修正组件引用路径(${isBack ? "主" : "分"}包)`
+      text = `修正组件与样式引用路径(${isBack ? "主" : "分"}包)`
       break;
     case "collect": // 收集引用关系
       text = "收集引用关系";
@@ -219,14 +228,52 @@ export function createOraText(type = "move") {
 */
 export function getAbsoluteByRelativePath(ctx, sourcePathExt, comRelativePath = "") {
   const { outputPath, sourcePath, nodeModulesPath } = ctx.paths;
+  const { NODE_MODULES_REG } = ctx.helper;
   const pattern = comRelativePath === "./"
     ? /(\.(?<ext>[^.\\\?\/\*\|<>:"]+))$/
     : /\/((?<filename>(?<name>[^\\\?\/\*\|<>:"]+?)\.)?(?<ext>[^.\\\?\/\*\|<>:"]+))$/
   let parentPath = sourcePathExt.replace(pattern, "");
-  if (/\/node_modules\//.test(sourcePathExt)) {
+  if (NODE_MODULES_REG.test(sourcePathExt)) {
     parentPath = parentPath.replace(nodeModulesPath, outputPath + "/npm");
   } else {
     parentPath = parentPath.replace(sourcePath, outputPath);
   }
   return path.resolve(parentPath, comRelativePath)
+}
+
+/**
+ * 
+ * @description 获取文件移动后的相对路径
+ * @param ctx
+ * @param from 
+ * @param to 
+ * @param relativePath 
+ * @returns
+ */
+export function getPathAfterMove(ctx, from, to, relativePath) {
+  const fromAbsolute = getAbsoluteByRelativePath(ctx, from, relativePath);
+  const toAbsolute = getAbsoluteByRelativePath(ctx, to);
+  return {
+    absolutePath: fromAbsolute,
+    relativePath: path.relative(toAbsolute, fromAbsolute)
+  };
+}
+
+/**
+ * 
+ * @description 移动后的文件修改全局样式的引用 ，主要针对 common.wxss
+ * @param ctx 
+ * @param param1 
+ */
+export async function modifyStyleImportPath(ctx, { from, to }) {
+  const { cssImports, fs: { readFile, writeFile } } = ctx.helper;
+  const fileType = getFileType();
+  const stylePath = resolvePath(to, fileType.style);
+  if (!stylePath) return;
+  const styleData = await readFile(stylePath);
+  const importPaths = cssImports(styleData);
+  await Promise.all(importPaths.map((item) => {
+    const { relativePath } = getPathAfterMove(ctx, from, to, item);
+    return writeFile(stylePath, String(styleData).replace(item, relativePath));
+  }));
 }

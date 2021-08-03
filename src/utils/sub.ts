@@ -1,8 +1,7 @@
 import path from "path";
 import ora from "ora";
 import { createSubRoot } from "taro-plugin-sub-tools";
-import { fileTypeMap, readAppJson, resolvePath, MAIN_ROOT, checkHasMainRoot, createOraText, combiningSuffix, copyAndRemove, getAbsoluteByRelativePath, mergeSubRoots, throwError } from "utils";
-
+import { fileTypeMap, readAppJson, resolvePath, MAIN_ROOT, checkHasMainRoot, createOraText, combiningSuffix, copyAndRemove, getAbsoluteByRelativePath, mergeSubRoots, getFileType, getPathAfterMove, modifyStyleImportPath } from "utils";
 
 /**
  * 
@@ -238,25 +237,33 @@ function collectMovePaths(ctx, componentMap) {
  * 
  * @description 移入主包后修正引用的组件路径
  */
-async function fixUsingComponentsPath(ctx, { from, to, isBack }) {
+async function fixComponentsAndStylePath(ctx, opts) {
+    const { from, to, isBack } = opts;
     const { componentMap } = ctx.subPackagesMap || {};
     const { fs: { readJson, writeJson } } = ctx.helper;
-    const jsonPathFrom = resolvePath(from, ".json");
-    const jsonPath = resolvePath(to, ".json");
-    if (!jsonPathFrom) throw throwError(`缺少from文件：${from}`);
-    if (!jsonPath) throw throwError(`缺少to文件：${to}`);
-    const { usingComponents, ...appCon } = await readJson(jsonPath, { throws: false }) || {};
+    const fileType = getFileType();
+    const jsonPathFrom = resolvePath(from, fileType.config);
+    const jsonPathTo = resolvePath(to, fileType.config);
+    if (!jsonPathFrom || !jsonPathTo) return;
+    // 跳过错误提示
+    // if (!jsonPathFrom) throw throwError(`缺少from文件：${from}`);
+    // if (!jsonPathTo) throw throwError(`缺少to文件：${to}`);
+    const { usingComponents, ...appCon } = await readJson(jsonPathTo, { throws: false }) || {};
     usingComponents && Object.keys(usingComponents).forEach(name => {
         const relativePath = usingComponents[name];
-        const absolutePath = getAbsoluteByRelativePath(ctx, from, relativePath);
+        const {
+            absolutePath,
+            relativePath: relativePathMoved
+        } = getPathAfterMove(ctx, from, to, relativePath);
         const { move = false } = componentMap[absolutePath] || {};
         // 返回主包时不应该修改同步跟随移动过来的包；
         if (isBack ? move : !move) {
             // 说明此组件未移入子包，需要更改引入路径
-            usingComponents[name] = path.relative(getAbsoluteByRelativePath(ctx, to), absolutePath);
+            usingComponents[name] = relativePathMoved;
         }
     });
-    return await writeJson(jsonPath, {
+    await modifyStyleImportPath(ctx, opts);
+    await writeJson(jsonPathTo, {
         ...appCon,
         usingComponents
     });
@@ -283,7 +290,7 @@ async function movePageOrComponent(ctx, movePaths, isBack = false) {
     // 修正组件引用路径
     const oraTextFix = createOraText("fix");
     spinner.start(oraTextFix.start({ isBack }));
-    await Promise.all(movePaths.map(([from, to]) => fixUsingComponentsPath(ctx, { from, to, isBack })))
+    await Promise.all(movePaths.map(([from, to]) => fixComponentsAndStylePath(ctx, { from, to, isBack })))
         .then(() => spinner.succeed(oraTextFix.succeed({ isBack })))
         .catch(err => spinner.fail(oraTextFix.fail({ isBack, message: err.message })));
 
