@@ -1,6 +1,6 @@
 {
   "name": "taro-plugin-sub",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "main": "dist/index.js",
   "types": "dist/types/index.d.ts",
   "files": [
@@ -42,7 +42,7 @@
   "dependencies": {
     "chalk": "^4.1.2",
     "ora": "^5.4.1",
-    "taro-plugin-sub-tools": "^0.0.1"
+    "taro-plugin-sub-tools": "0.0.2-alpha.0"
   },
   "devDependencies": {
     "@rollup/plugin-alias": "^3.1.1",

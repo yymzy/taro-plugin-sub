@@ -3,6 +3,44 @@ import fs from "fs";
 import chalk from "chalk";
 
 /**
+ * @description 文件类型后缀
+ */
+export const fileTypeMap = {
+  weapp: {
+    templ: ".wxml",
+    style: ".wxss",
+    config: ".json",
+    script: ".js"
+  },
+  alipay: {
+    templ: ".axml",
+    style: ".acss",
+    config: ".json",
+    script: ".js"
+  }
+}
+
+/**
+ * @description
+ * MAIN_ROOT 主包
+ * CACHE_ROOT 缓存根路径
+ */
+export const MAIN_ROOT = "main";
+export const CACHE_ROOT = ".sub-cache";
+
+
+/**
+ * 
+ * @description 获取缓存根路径
+ * @param ctx 
+ * @returns 
+ */
+function getCachePath(ctx) {
+  const { outputPath } = ctx.paths;
+  return outputPath + CACHE_ROOT;
+}
+
+/**
  * 
  * @description 错误
  * @param message 
@@ -52,52 +90,62 @@ export function combiningSuffix(paths) {
 
 /**
  * 
- * 复制文件或移除文件
+ * @description 替换缓存路径
+ * @param ctx 
+ * @param file 
+ * @returns 
+ */
+function replaceCachePath(ctx, file) {
+  const { outputPath } = ctx.paths;
+  return file.replace(outputPath, getCachePath(ctx))
+}
+
+/**
+ * 
+ * @description 获取真实存在的缓存路径
+ * @param ctx 
+ * @param file 
+ * @param suffix 
+ * @returns 
+ */
+export function resolveCachePath(ctx, file, suffix) {
+  return resolvePath(replaceCachePath(ctx, file), suffix);
+}
+
+/**
+ * 
+ * 移动到临时缓存位置
  * @param ctx 
  * @param param1 
  * @returns 
  */
-export async function copyAndRemove(ctx, opts, action = "copy") {
-  const { fs: { copySync, removeSync } } = ctx.helper;
+export async function moveAndCopy(ctx, opts, isBack) {
+  const { fs: { removeSync, moveSync, copySync } } = ctx.helper;
   const [from, to, suffix] = opts;
-  const fromResolved = resolvePath(from, suffix);
-  if (!fromResolved) return
-  const toResolved = to + suffix;
-  switch (action) {
-    case "copy":
-      await copySync(fromResolved, toResolved);
-      break;
-    case "remove":
-      await removeSync(fromResolved);
-      break;
 
-    default:
-      break;
-  }
+  // 编译后的源文件路径：即为主包的路径
+  const originalFilePath = isBack ? to : from;
+
+  // 返回主包时，直接删除分包文件即可
+  try {
+    if (isBack) {
+      const fromResolved = resolvePath(from, suffix);
+      fromResolved && removeSync(fromResolved);
+    } else {
+      // 来源文件处理，查找存在的文件真实路径
+      const originalResolved = resolvePath(originalFilePath, suffix);
+      if (originalResolved) {
+        const cacheResolved = replaceCachePath(ctx, originalResolved);
+        moveSync(originalResolved, cacheResolved, { overwrite: true });
+      }
+    }
+  } catch (error) { }
+
+  // 缓存路径
+  const toFile = to + suffix;
+  const cacheResolvedExt = resolveCachePath(ctx, originalFilePath, suffix);
+  cacheResolvedExt && copySync(cacheResolvedExt, toFile);
 }
-
-/**
- * @description 文件类型后缀
- */
-export const fileTypeMap = {
-  weapp: {
-    templ: ".wxml",
-    style: ".wxss",
-    config: ".json",
-    script: ".js"
-  },
-  alipay: {
-    templ: ".axml",
-    style: ".acss",
-    config: ".json",
-    script: ".js"
-  }
-}
-
-/**
- * @description 主包
- */
-export const MAIN_ROOT = "main";
 
 /**
  * 
@@ -276,4 +324,13 @@ export async function modifyStyleImportPath(ctx, { from, to }) {
     const { relativePath } = getPathAfterMove(ctx, from, to, item);
     return writeFile(stylePath, String(styleData).replace(item, relativePath));
   }));
+}
+
+/**
+ * @description 清空缓存目录
+ *  */
+export function emptyCache(ctx) {
+  const { fs: { emptyDir } } = ctx.helper;
+  // 清空缓存目录
+  emptyDir(getCachePath(ctx));
 }

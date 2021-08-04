@@ -1,7 +1,7 @@
 import path from "path";
 import ora from "ora";
 import { createSubRoot } from "taro-plugin-sub-tools";
-import { fileTypeMap, readAppJson, resolvePath, MAIN_ROOT, checkHasMainRoot, createOraText, combiningSuffix, copyAndRemove, getAbsoluteByRelativePath, mergeSubRoots, getFileType, getPathAfterMove, modifyStyleImportPath } from "utils";
+import { fileTypeMap, readAppJson, resolvePath, MAIN_ROOT, checkHasMainRoot, createOraText, combiningSuffix, moveAndCopy, getAbsoluteByRelativePath, mergeSubRoots, getFileType, getPathAfterMove, modifyStyleImportPath, resolveCachePath } from "utils";
 
 /**
  * 
@@ -37,12 +37,12 @@ function formatSubPackages(ctx, subPackages) {
     const subRootMap = {}; // 分包配置
     const subPackagesFormatted = subPackages.map(({ preloadRule, network, root: sourceRoot, pages, outputRoot, ...subItem }, index) => {
         // 保证分包只有一级
-        const { subRoot, path: subRootPath } = createSubRoot({ outputRoot, sourceRoot }, index);
+        const { subRoot, outputPrefix, sourcePrefix } = createSubRoot({ outputRoot, sourceRoot }, index);
         // 收集需要移动的分包列表
         const pagesFormatted = pages.map(item => {
-            const page = `${sourceRoot}/${item}`;
+            const page = sourcePrefix + item;
             const from = path.resolve(outputPath, `./${page}`);
-            const to = path.resolve(outputPath, `./${subRootPath}/${item}`);
+            const to = path.resolve(outputPath, `./${outputPrefix}/${item}`);
             movePaths.push([from, to]);
             const [sourcePathExt] = [...JS_EXT, ...TS_EXT].map(suffix => resolvePath(from.replace(outputPath, sourcePath), suffix)).filter(item => item);
             if (sourcePathExt) {
@@ -174,6 +174,12 @@ function collectComponentMap(componentMapPreset) {
 export function modifyBuildTempFileContent(ctx, tempFiles) {
     const EntryPath = Object.keys(tempFiles).find(key => tempFiles[key].type === 'ENTRY');
     const { config = {} } = tempFiles[EntryPath] || {};
+    if (EntryPath) {
+        ctx.appConfig = {
+            pages: config.pages,
+            subPackages: config.subPackages
+        }
+    }
     const { subPackages, movePaths: movePagePath, preloadRule, subRootMap } = formatSubPackages(ctx, config.subPackages);
     // 这里仅做收集，编译完成后统一处理
     if (subRootMap) {
@@ -242,31 +248,33 @@ async function fixComponentsAndStylePath(ctx, opts) {
     const { componentMap } = ctx.subPackagesMap || {};
     const { fs: { readJson, writeJson } } = ctx.helper;
     const fileType = getFileType();
-    const jsonPathFrom = resolvePath(from, fileType.config);
+    if (isBack) {
+        const jsonPathFrom = resolveCachePath(ctx, from, fileType.config);
+        if (!jsonPathFrom) return;
+    }
     const jsonPathTo = resolvePath(to, fileType.config);
-    if (!jsonPathFrom || !jsonPathTo) return;
-    // 跳过错误提示
-    // if (!jsonPathFrom) throw throwError(`缺少from文件：${from}`);
-    // if (!jsonPathTo) throw throwError(`缺少to文件：${to}`);
-    const { usingComponents, ...appCon } = await readJson(jsonPathTo, { throws: false }) || {};
-    usingComponents && Object.keys(usingComponents).forEach(name => {
-        const relativePath = usingComponents[name];
-        const {
-            absolutePath,
-            relativePath: relativePathMoved
-        } = getPathAfterMove(ctx, from, to, relativePath);
-        const { move = false } = componentMap[absolutePath] || {};
-        // 返回主包时不应该修改同步跟随移动过来的包；
-        if (isBack ? move : !move) {
-            // 说明此组件未移入子包，需要更改引入路径
-            usingComponents[name] = relativePathMoved;
-        }
-    });
+    if (jsonPathTo) {
+        const { usingComponents, ...appCon } = await readJson(jsonPathTo, { throws: false }) || {};
+        usingComponents && Object.keys(usingComponents).forEach(name => {
+            const relativePath = usingComponents[name];
+            const {
+                absolutePath,
+                relativePath: relativePathMoved
+            } = getPathAfterMove(ctx, from, to, relativePath);
+            const { move = false } = componentMap[absolutePath] || {};
+            // 返回主包时不应该修改同步跟随移动过来的包；
+            if (isBack ? move : !move) {
+                // 说明此组件未移入子包，需要更改引入路径
+                usingComponents[name] = relativePathMoved;
+            }
+        });
+        await writeJson(jsonPathTo, {
+            ...appCon,
+            usingComponents
+        });
+    }
     await modifyStyleImportPath(ctx, opts);
-    await writeJson(jsonPathTo, {
-        ...appCon,
-        usingComponents
-    });
+
 }
 
 /**
@@ -283,7 +291,7 @@ async function movePageOrComponent(ctx, movePaths, isBack = false) {
     const oraTextMove = createOraText();
     const spinner = ora().start(oraTextMove.start({ isBack }));
     const movePathsWithSuffix = combiningSuffix(movePaths);
-    await Promise.all(movePathsWithSuffix.map(item => copyAndRemove(ctx, item)))
+    await Promise.all(movePathsWithSuffix.map(item => moveAndCopy(ctx, item, isBack)))
         .then(() => spinner.succeed(oraTextMove.succeed({ isBack })))
         .catch(err => spinner.fail(oraTextMove.fail({ isBack, message: err.message })));
 
@@ -293,9 +301,6 @@ async function movePageOrComponent(ctx, movePaths, isBack = false) {
     await Promise.all(movePaths.map(([from, to]) => fixComponentsAndStylePath(ctx, { from, to, isBack })))
         .then(() => spinner.succeed(oraTextFix.succeed({ isBack })))
         .catch(err => spinner.fail(oraTextFix.fail({ isBack, message: err.message })));
-
-    // 移除文件
-    await Promise.all(movePathsWithSuffix.map(item => copyAndRemove(ctx, item, "remove")));
 }
 
 /**
@@ -306,6 +311,7 @@ export async function mvSubPackages(ctx) {
     const { movePaths, componentBackPaths, subPackages, preloadRule } = ctx.subPackagesMap || {};
     if (subPackages && subPackages.length > 0) {
         const { fs: { writeJson } } = ctx.helper;
+        // 移动文件
         await movePageOrComponent(ctx, movePaths);
         await movePageOrComponent(ctx, componentBackPaths, true);
         // 更改subPackages配置，及预加载配置
@@ -317,4 +323,32 @@ export async function mvSubPackages(ctx) {
             });
         });
     }
+}
+
+/**
+ * 
+ * @description 更新页面路径
+ * @param ctx 
+ * @param subPackages 
+ */
+export async function renamePagesName(ctx) {
+    const { outputPath } = ctx.paths;
+    const { pages, subPackages } = ctx.appConfig;
+    const { fs: { renameSync } } = ctx.helper;
+    const fileType = getFileType();
+    const list = [...pages];
+    subPackages && subPackages.map(({ root, pages }) => {
+        list.push(...pages.map(item => `${root}/${item}`));
+    });
+    list.map(item => {
+        Object.keys(fileType).map(key => {
+            const suffix = fileType[key];
+            const pagePath = path.join(outputPath, item)
+            const oldPath = resolvePath(pagePath, suffix);
+            const newPath = pagePath + suffix;
+            if (oldPath) {
+                renameSync(oldPath, newPath)
+            }
+        });
+    });
 }

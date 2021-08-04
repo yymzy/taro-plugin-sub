@@ -1,12 +1,12 @@
-import { updateConfig } from "utils";
-import { mvSubPackages, modifyBuildTempFileContent } from "../utils/sub";
+import { emptyCache, updateConfig } from "utils";
+import { mvSubPackages, modifyBuildTempFileContent, renamePagesName } from "../utils/sub";
 
 export default (ctx, opts) => {
 
-    /**
-     * @description 更新编译配置项
-     */
-    updateConfig(ctx);
+    ctx.onBuildStart(() => {
+        updateConfig(ctx);
+        emptyCache(ctx);
+    });
 
     /**
      * @description 修改chain
@@ -41,7 +41,8 @@ export default (ctx, opts) => {
     /**
      * @description 编译完成
      */
-    ctx.onBuildFinish(() => {
-        mvSubPackages(ctx);
+    ctx.onBuildFinish(async () => {
+        await renamePagesName(ctx);
+        await mvSubPackages(ctx);
     });
 };
