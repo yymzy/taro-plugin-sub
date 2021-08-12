@@ -200,11 +200,14 @@ export function readAppJson(ctx) {
 /**
  * 
  * @description 检查是否已经包含主包标记
+ * 两种方案：
+ * 1、多个分包引用，则放入主包：subRootsLength > 1 || subRoots.includes(MAIN_ROOT)；
+ * 2、放入各个分包：subRoots.includes(MAIN_ROOT)；
  * @param subRoots 
  * @returns 
  */
 export function checkHasMainRoot(subRoots) {
-  return subRoots && subRoots.includes(MAIN_ROOT);
+  return subRoots && (subRoots.includes(MAIN_ROOT) || subRoots.length > 1);
 }
 
 /**

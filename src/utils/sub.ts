@@ -87,8 +87,6 @@ function loopFindSubRoots(componentMapPreset, sourcePathExt, preSubRoots = null)
     const parentsLength = parents ? parents.length : 0;
     const subRootsLength = subRoots ? subRoots.length : 0;
     if (subRootsLength && (checkHasMainRoot(subRootsMerged) || !parentsLength)) {
-        // 1、多个分包引用，则放入主包：subRootsLength > 1 || subRoots[0] === mainRoot；
-        // 2、放入各个分包：subRoots.includes(MAIN_ROOT)； 
         return subRootsMerged;
     }
     if (parentsLength) {
