@@ -2,6 +2,8 @@ import path from "path";
 import fs from "fs";
 import chalk from "chalk";
 
+export const ref = { current: null }
+
 /**
  * @description 文件类型后缀
  */
@@ -26,19 +28,8 @@ export const fileTypeMap = {
  * CACHE_ROOT 缓存根路径
  */
 export const MAIN_ROOT = "main";
-export const CACHE_ROOT = ".sub-cache";
-
-
-/**
- * 
- * @description 获取缓存根路径
- * @param ctx 
- * @returns 
- */
-function getCachePath(ctx) {
-  const { outputPath } = ctx.paths;
-  return outputPath + CACHE_ROOT;
-}
+export const SUFFIX_REG = /(\.(?<ext>[^.\\\?\/\*\|<>:"]+))$/;
+export const FILE_NAME_REG = /\/((?<filename>(?<name>[^\\\?\/\*\|<>:"]+?)\.)?(?<ext>[^.\\\?\/\*\|<>:"]+))$/;
 
 /**
  * 
@@ -53,9 +44,8 @@ export function throwError(message) {
 /**
  * 
  * @description 更新配置，分包注入chunk
- * @param ctx 
  */
-export function updateConfig(ctx) {
+export function updateConfig() {
   // ctx.initialConfig.mini.addChunkPages = (pages, pagesNames) => {
   // }
 }
@@ -68,83 +58,6 @@ export function updateConfig(ctx) {
 export function getFileType() {
   const { TARO_ENV, PLATFORM_ENV = TARO_ENV } = process.env;
   return fileTypeMap[PLATFORM_ENV];
-}
-
-/**
- *
- * 组合后缀
- * @param paths 
- */
-export function combiningSuffix(paths) {
-  let fileType = getFileType();
-  const files = [];
-  if (!fileType || !paths) return files;
-  paths.forEach(([from, to]) => {
-    Object.keys(fileType).forEach(k => {
-      const suffix = fileType[k]; // 后缀
-      files.push([from, to, suffix]);
-    });
-  });
-  return files;
-}
-
-/**
- * 
- * @description 替换缓存路径
- * @param ctx 
- * @param file 
- * @returns 
- */
-function replaceCachePath(ctx, file) {
-  const { outputPath } = ctx.paths;
-  return file.replace(outputPath, getCachePath(ctx))
-}
-
-/**
- * 
- * @description 获取真实存在的缓存路径
- * @param ctx 
- * @param file 
- * @param suffix 
- * @returns 
- */
-export function resolveCachePath(ctx, file, suffix) {
-  return resolvePath(replaceCachePath(ctx, file), suffix);
-}
-
-/**
- * 
- * 移动到临时缓存位置
- * @param ctx 
- * @param param1 
- * @returns 
- */
-export async function moveAndCopy(ctx, opts, isBack) {
-  const { fs: { removeSync, moveSync, copySync } } = ctx.helper;
-  const [from, to, suffix] = opts;
-
-  // 编译后的源文件路径：即为主包的路径
-  const originalFilePath = isBack ? to : from;
-
-  // 返回主包时，直接删除分包文件即可
-  try {
-    if (isBack) {
-      const fromResolved = resolvePath(from, suffix);
-      fromResolved && removeSync(fromResolved);
-    } else {
-      // 来源文件处理，查找存在的文件真实路径
-      const originalResolved = resolvePath(originalFilePath, suffix);
-      if (originalResolved) {
-        const cacheResolved = replaceCachePath(ctx, originalResolved);
-        moveSync(originalResolved, cacheResolved, { overwrite: true });
-      }
-    }
-  } catch (error) { }
-
-  // 缓存路径
-  const toFile = to + suffix;
-  const cacheResolvedExt = resolveCachePath(ctx, originalFilePath, suffix);
-  cacheResolvedExt && copySync(cacheResolvedExt, toFile);
 }
 
 /**
@@ -182,19 +95,6 @@ export function resolvePath(p: string, suffix: string): string {
     return realpath;
   }
   return ""
-}
-
-// /**
-//  * 
-//  * @description 读取app.json配置项
-//  * @param ctx 
-//  * @returns 
-//  */
-export function readAppJson(ctx) {
-  const { outputPath } = ctx.paths;
-  const { fs: { readJson } } = ctx.helper;
-  const appJsonPath = path.resolve(outputPath, "./app.json");
-  return readJson(appJsonPath).then(data => ({ appJsonPath, ...data }));
 }
 
 /**
@@ -272,22 +172,18 @@ export function createOraText(type = "move") {
 /**
 * 
 * @description 获取自定义组件的输出路径
-* @param ctx 
 * @param sourcePathExt 
 * @param comRelativePath 
 * @returns 
 */
-export function getAbsoluteByRelativePath(ctx, sourcePathExt, comRelativePath = "") {
-  const { outputPath, sourcePath, nodeModulesPath } = ctx.paths;
+export function getAbsoluteByRelativePath(sourcePathExt, comRelativePath = "") {
+  const ctx = ref.current;
+  const { nodeModulesPath } = ctx.paths;
   const { NODE_MODULES_REG } = ctx.helper;
-  const pattern = comRelativePath === "./"
-    ? /(\.(?<ext>[^.\\\?\/\*\|<>:"]+))$/
-    : /\/((?<filename>(?<name>[^\\\?\/\*\|<>:"]+?)\.)?(?<ext>[^.\\\?\/\*\|<>:"]+))$/
+  const pattern = comRelativePath === "./" ? SUFFIX_REG : FILE_NAME_REG;
   let parentPath = sourcePathExt.replace(pattern, "");
   if (NODE_MODULES_REG.test(sourcePathExt)) {
-    parentPath = parentPath.replace(nodeModulesPath, outputPath + "/npm");
-  } else {
-    parentPath = parentPath.replace(sourcePath, outputPath);
+    parentPath = parentPath.replace(nodeModulesPath, "/npm");
   }
   return path.resolve(parentPath, comRelativePath)
 }
@@ -295,28 +191,31 @@ export function getAbsoluteByRelativePath(ctx, sourcePathExt, comRelativePath = 
 /**
  * 
  * @description 获取文件移动后的相对路径
- * @param ctx
  * @param from 
  * @param to 
  * @param relativePath 
  * @returns
  */
-export function getPathAfterMove(ctx, from, to, relativePath) {
-  const fromAbsolute = getAbsoluteByRelativePath(ctx, from, relativePath);
-  const toAbsolute = getAbsoluteByRelativePath(ctx, to);
+export function getPathAfterMove(from, to, relativePath) {
+  const fromAbsolute = getAbsoluteByRelativePath(from, relativePath);
+  const toAbsolute = getAbsoluteByRelativePath(to);
   return {
     absolutePath: fromAbsolute,
     relativePath: path.relative(toAbsolute, fromAbsolute)
   };
 }
 
+export function getRelativeByAbsolutePath(to, absolutePath) {
+  return path.relative(to, absolutePath);
+}
+
 /**
  * 
  * @description 移动后的文件修改全局样式的引用 ，主要针对 common.wxss
- * @param ctx 
  * @param param1 
  */
-export async function modifyStyleImportPath(ctx, { from, to }) {
+export async function modifyStyleImportPath({ from, to }) {
+  const ctx = ref.current;
   const { cssImports, fs: { readFile, writeFile } } = ctx.helper;
   const fileType = getFileType();
   const stylePath = resolvePath(to, fileType.style);
@@ -324,16 +223,52 @@ export async function modifyStyleImportPath(ctx, { from, to }) {
   const styleData = await readFile(stylePath);
   const importPaths = cssImports(styleData);
   await Promise.all(importPaths.map((item) => {
-    const { relativePath } = getPathAfterMove(ctx, from, to, item);
+    const { relativePath } = getPathAfterMove(from, to, item);
     return writeFile(stylePath, String(styleData).replace(item, relativePath));
   }));
 }
 
 /**
- * @description 清空缓存目录
- *  */
-export function emptyCache(ctx) {
-  const { fs: { emptyDir } } = ctx.helper;
-  // 清空缓存目录
-  emptyDir(getCachePath(ctx));
+ * 
+ * @description 获取组件移动路径
+ * @param from 
+ * @param subRoot 
+ * @returns 
+ */
+export function getComponentMovePath(from, subRoot) {
+  const ctx = ref.current;
+  const { sourcePath } = ctx.paths;
+  return from.replace(sourcePath, path.join(sourcePath, subRoot));
+}
+
+// function getOutputPath(path) {
+//   const { outputPath, sourcePath } = ctx.paths;
+//   return path.replace(sourcePath, outputPath)
+// }
+
+export function deleteMovedPaths(movePaths) {
+  const ctx = ref.current;
+  const { sourcePath, outputPath } = ctx.paths;
+  const { fs: { remove } } = ctx.helper
+  // 存在则删除
+  const fileType = getFileType();
+  movePaths.forEach(([from]) => {
+    Object.keys(fileType).forEach(key => {
+      const outputPathExt = resolvePath(from.replace(sourcePath, outputPath), fileType[key]);
+      if (outputPathExt) {
+        remove(outputPathExt);
+      }
+    });
+  });
+}
+
+
+/**
+ * 
+ * @description 移除文件后缀
+ * @param file 
+ * @returns 
+ */
+export function removeFileSuffix(filePath) {
+  return filePath.replace(SUFFIX_REG, "");
 }
