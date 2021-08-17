@@ -107,8 +107,8 @@ function loopFindSubRoots(componentMapPreset, sourcePathExt, preSubRoots = null)
 function collectComponentMapPreset(tempFiles, subRootMap) {
     // 收集对应的自定义组件信息
     const componentMapPreset = {};
-    // const ctx = ref.current;
-    // const { movePaths } = ctx.subPackagesMap || {};
+    const ctx = ref.current;
+    const { movePaths } = ctx.subPackagesMap || {};
     Object.keys(tempFiles).forEach(sourcePathExt => {
         const { type, config } = tempFiles[sourcePathExt] || {};
         const { usingComponents } = config || {};
@@ -120,10 +120,10 @@ function collectComponentMapPreset(tempFiles, subRootMap) {
             const relativePath = usingComponents[name];
             let absolutePath = getAbsoluteByRelativePath(sourcePathExt, relativePath);
             let currentCom = componentMapPreset[absolutePath];
-            // if (movePaths) {
-            //     const [currentFrom = absolutePath] = movePaths.find(([, to]) => to === absolutePath) || [];
-            //     absolutePath = currentFrom
-            // }
+            if (movePaths) {
+                const [currentFrom] = movePaths.find(([from]) => from === absolutePath) || [];
+                if (currentFrom) return;
+            }
             const parentCom = componentMapPreset[parentAbsolutePath];
             if (!currentCom) {
                 currentCom = componentMapPreset[absolutePath] = {
@@ -145,7 +145,7 @@ function collectComponentMapPreset(tempFiles, subRootMap) {
             }
         });
     });
-    console.log("componentMapPreset",componentMapPreset);
+    console.log("componentMapPreset", componentMapPreset);
     return componentMapPreset;
 }
 
