@@ -1,6 +1,7 @@
 import path from "path";
 import fs from "fs";
 import chalk from "chalk";
+import { createSubRoot } from "taro-plugin-sub-tools";
 
 export const ref = { current: null }
 
@@ -67,7 +68,7 @@ export function getFileType() {
  * @param suffix
  * @returns 
  */
-export function resolvePath(p: string, suffix: string): string {
+export function resolvePath(p: string, suffix: string, filesMap?): string {
   const platformEnv = process.env.PLATFORM_ENV || process.env.TARO_ENV;
   const modeEnv = process.env.MODE_ENV;
   const types = [platformEnv];
@@ -75,23 +76,30 @@ export function resolvePath(p: string, suffix: string): string {
   if (modeEnv) {
     types.unshift(`${platformEnv}.${modeEnv}`, modeEnv);
   }
+  // 检查文件是否存在，兼容传入tempFiles的模式
+  const checkFileIsExist = (file) => {
+    if (filesMap) {
+      return !!filesMap[file]
+    }
+    return fs.existsSync(file)
+  }
   for (let i = 0, len = types.length; i < len; i++) {
     const type = types[i];
-    if (fs.existsSync(realpath = `${p}.${type}${suffix}`)) {
+    if (checkFileIsExist(realpath = `${p}.${type}${suffix}`)) {
       return realpath;
     }
-    if (fs.existsSync(realpath = `${p}${path.sep}index.${type}${suffix}`)) {
+    if (checkFileIsExist(realpath = `${p}${path.sep}index.${type}${suffix}`)) {
       return realpath;
     }
     const pathReg = /\/index$/;
-    if (pathReg.test(p) && fs.existsSync(realpath = `${p.replace(pathReg, `.${type}/index`)}${suffix}`)) {
+    if (pathReg.test(p) && checkFileIsExist(realpath = `${p.replace(pathReg, `.${type}/index`)}${suffix}`)) {
       return realpath;
     }
   }
-  if (fs.existsSync(realpath = `${p}${suffix}`)) {
+  if (checkFileIsExist(realpath = `${p}${suffix}`)) {
     return realpath;
   }
-  if (fs.existsSync(realpath = `${p}${path.sep}index${suffix}`)) {
+  if (checkFileIsExist(realpath = `${p}${path.sep}index${suffix}`)) {
     return realpath;
   }
   return ""
@@ -107,7 +115,7 @@ export function resolvePath(p: string, suffix: string): string {
  * @returns 
  */
 export function checkHasMainRoot(subRoots) {
-  return subRoots && (subRoots.includes(MAIN_ROOT) || subRoots.length > 1);
+  return subRoots && (subRoots.includes(MAIN_ROOT));
 }
 
 /**
@@ -238,13 +246,12 @@ export async function modifyStyleImportPath({ from, to }) {
 export function getComponentMovePath(from, subRoot) {
   const ctx = ref.current;
   const { sourcePath } = ctx.paths;
-  return from.replace(sourcePath, path.join(sourcePath, subRoot));
+  const toPath = path.join(sourcePath, subRoot);
+  if (from.startsWith(toPath)) {
+    return from;
+  }
+  return from.replace(sourcePath, toPath);
 }
-
-// function getOutputPath(path) {
-//   const { outputPath, sourcePath } = ctx.paths;
-//   return path.replace(sourcePath, outputPath)
-// }
 
 export function deleteMovedPaths(movePaths) {
   const ctx = ref.current;
@@ -271,4 +278,274 @@ export function deleteMovedPaths(movePaths) {
  */
 export function removeFileSuffix(filePath) {
   return filePath.replace(SUFFIX_REG, "");
+}
+
+
+/**
+ * 
+ * @description 收集预下载分包配置，微信支持配置 name
+ * @param param0 
+ * @param preloadRuleMap 
+ */
+export function collectPreloadRule({ preloadRule, name, network = "all" }, preloadRuleMap) {
+  if (!preloadRule) return
+  preloadRuleMap[preloadRule] = preloadRuleMap[preloadRule] || {
+    packages: [],
+    network
+  }
+  preloadRuleMap[preloadRule].packages.push(name);
+}
+
+/**
+* 
+* @description 格式化分包
+* @returns 
+*/
+export function formatSubPackages(tempFiles) {
+  const ctx = ref.current;
+  const { TARO_ENV, PLATFORM_ENV = TARO_ENV } = process.env;
+  const { sourcePath } = ctx.paths;
+  const { subPackages } = ctx.appConfig;
+  const fileType = fileTypeMap[PLATFORM_ENV];
+  if (!fileType || !subPackages || subPackages.length === 0) return {};
+
+  const movePaths = []; // 分包列表
+  const preloadRuleMap = {}; // 预下载配置
+  const subRootMap = {}; // 分包配置
+  const subPackagesFormatted = subPackages.map(({ preloadRule, network, root: sourceRoot, pages, outputRoot, ...subItem }, index) => {
+    // 保证分包只有一级
+    const { subRoot, outputPrefix, sourcePrefix } = createSubRoot({ outputRoot, sourceRoot }, index);
+    // 收集需要移动的分包列表
+    const pagesFormatted = pages.map(item => {
+      const page = sourcePrefix + item;
+      const from = path.resolve(sourcePath, `./${page}`);
+      const to = path.resolve(sourcePath, `./${outputPrefix}/${item}`);
+      movePaths.push([from, to]);
+      const { sourcePathExt } = getSourceExtPath(from, tempFiles);
+      if (sourcePathExt) {
+        subRootMap[sourcePathExt] = subRoot;
+      }
+      return page;
+    });
+
+    // preloadRule
+    let name = subRoot;
+    if (PLATFORM_ENV === 'weapp') {
+      // 微信可配置name
+      name = subItem.name || subRoot;
+    } else {
+      delete subItem.name;
+    }
+    collectPreloadRule({ preloadRule, name, network }, preloadRuleMap);
+
+    return {
+      root: subRoot,
+      pages: pagesFormatted,
+      ...subItem
+    }
+  });
+
+  return {
+    subRootMap,
+    movePaths,
+    preloadRule: preloadRuleMap,
+    subPackages: subPackagesFormatted
+  }
+}
+
+/**
+ * 
+ * @description 收集 componentMapPreset
+ * @param tempFiles 
+ * @param subRootMap 
+ * @returns 
+ */
+export function collectComponentMapPreset(tempFiles, subRootMap) {
+  // 收集对应的自定义组件信息
+  const componentMapPreset = {};
+  Object.keys(tempFiles).forEach(item => {
+    const { type, config } = tempFiles[item] || {};
+    const { usingComponents } = config || {};
+    if (!usingComponents || type === 'ENTRY') return;
+    const subRoot = subRootMap[item] || MAIN_ROOT;
+    const parentAbsolutePath = getAbsoluteByRelativePath(item, "./");
+    Object.keys(usingComponents).forEach(name => {
+      const relativePath = usingComponents[name];
+      let absolutePath = getAbsoluteByRelativePath(item, relativePath);
+      let currentCom = componentMapPreset[absolutePath];
+      const parentCom = componentMapPreset[parentAbsolutePath];
+      if (!currentCom) {
+        currentCom = componentMapPreset[absolutePath] = {
+          parents: []
+        }
+      }
+      if (type === 'PAGE') {
+        // 父级为页面组件直接注入subRoots
+        currentCom.subRoots = mergeSubRoots(currentCom.subRoots, [subRoot]);
+      } else {
+        const { subRoots: parentSubRoots } = parentCom || {};
+        if (checkHasMainRoot(parentSubRoots)) {
+          // 已经包含主包，则判断一定进入主包，不用再做处理
+          currentCom.subRoots = mergeSubRoots(currentCom.subRoots, parentSubRoots);
+        } else {
+          // 其他组件push进去等待查询
+          currentCom.parents.push(parentAbsolutePath);
+        }
+      }
+    });
+  });
+  return componentMapPreset;
+}
+
+/**
+ * 
+ * @description 循环查找各组件所属分包
+ * @param componentMapPreset
+ */
+function loopFindSubRoots(componentMapPreset, sourcePathExt, preSubRoots = null) {
+  const { subRoots, parents } = componentMapPreset[sourcePathExt] || {}; // 当前subRoots
+  const subRootsMerged = mergeSubRoots(preSubRoots, subRoots);  // 合并上一个与当前的subRoots
+  const parentsLength = parents ? parents.length : 0;
+  const subRootsLength = subRoots ? subRoots.length : 0;
+  if (subRootsLength && (checkHasMainRoot(subRootsMerged) || !parentsLength)) {
+    return subRootsMerged;
+  }
+  if (parentsLength) {
+    for (let i = 0; i < parentsLength; i++) {
+      return loopFindSubRoots(componentMapPreset, parents[i], subRootsMerged);
+    }
+  }
+  return subRootsMerged;
+}
+
+/**
+ * 
+ * @description 收集 componentMap
+ * @param componentMapPreset 
+ * @returns 
+ */
+export function collectComponentMap(componentMapPreset) {
+  const componentMap = {}
+  // 收集subRoots
+  Object.keys(componentMapPreset).forEach(sourcePathExt => {
+    if (!componentMap[sourcePathExt]) {
+      componentMap[sourcePathExt] = {};
+    }
+    const subRoots = loopFindSubRoots(componentMapPreset, sourcePathExt);
+    if (subRoots) {
+      componentMap[sourcePathExt].subRoots = mergeSubRoots(componentMap[sourcePathExt].subRoots, subRoots);
+    }
+  });
+  return componentMap;
+}
+
+
+/**
+ * 
+ * @description 移除部分ke
+ * @param tempFiles 
+ * @param subRootMap 
+ * @param keys 
+ */
+export function deleteSomeKeys(keys, ...dataMap) {
+  keys.forEach(key => {
+    dataMap.forEach(data => {
+      delete data[key];
+    });
+  });
+}
+
+
+/**
+ * 
+ * @description 修正组件引用关系
+ * @param componentMap
+ */
+function fixComponentMap(componentMap) {
+  const ctx = ref.current;
+  const { movePaths } = ctx.subPackagesMap || {};
+  if (!movePaths) return;
+  const deleteKeys = [];
+  Object.keys(componentMap).forEach(key => {
+    let { subRoots } = componentMap[key];
+    const [from] = movePaths.find(([, to]) => to === key) || [];
+    const { subRoots: fromSubRoots } = componentMap[from] || {};
+    if (fromSubRoots) {
+      // 已经在分包组中，则
+      componentMap[from].subRoots = mergeSubRoots(fromSubRoots, subRoots);
+      deleteKeys.push(key);
+    }
+  });
+  deleteSomeKeys(deleteKeys, componentMap);
+}
+
+/**
+ * 
+ * @description 收集移动路径，移出或者回退的路径
+ * @param componentMap 
+ * @returns 
+ */
+export function collectMovePaths(componentMap) {
+  // 需要移回的自定义组件 
+  const componentBackPaths = [];
+  // 将自定义组件移入移动的列表
+  const componentMovePaths = [];
+  fixComponentMap(componentMap);
+  Object
+    .keys(componentMap).forEach(key => {
+      const { subRoots } = componentMap[key];
+      if (!subRoots || subRoots.length === 0) return;
+      const move = !checkHasMainRoot(subRoots);
+      componentMap[key].move = move;
+      // 可支持注入多个分包
+      const paths = subRoots
+        .filter(item => item !== MAIN_ROOT)
+        .map(item => ([key, getComponentMovePath(key, item)]));
+      move
+        ? componentMovePaths.push(...paths)
+        : componentBackPaths.push(...paths.map(item => ([...item].reverse())));
+    });
+
+  return {
+    componentMovePaths,
+    componentBackPaths
+  }
+}
+
+/**
+ * 
+ * @description 获取源码真实路径
+ * @param from 
+ * @param tempFiles 
+ * @returns 
+ */
+export function getSourceExtPath(from, tempFiles) {
+  const ctx = ref.current;
+  const { JS_EXT, TS_EXT } = ctx.helper;
+  const list = [...JS_EXT, ...TS_EXT];
+  let sourcePathExt = "";
+  let suffix = ""
+  for (let i = 0, len = list.length; i < len; i++) {
+    suffix = list[i];
+    sourcePathExt = resolvePath(from, suffix, tempFiles)
+    if (sourcePathExt) {
+      break;
+    }
+  }
+  return { sourcePathExt, suffix };
+}
+
+/**
+ * 
+ * @description 获取资源路径
+ * @param from 
+ * @param assets 
+ */
+export function getAssetsExtPaths(from, assets) {
+  const fileType = getFileType();
+  return Object.keys(fileType).map((key) => {
+    const suffix = fileType[key];
+    const assetsPathExt = resolvePath(from, suffix, assets);
+    return assetsPathExt ? [assetsPathExt, suffix] : null
+  }).filter(item => item);
 }
