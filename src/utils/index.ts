@@ -34,16 +34,6 @@ export const FILE_NAME_REG = /\/((?<filename>(?<name>[^\\\?\/\*\|<>:"]+?)\.)?(?<
 
 /**
  * 
- * @description 错误
- * @param message 
- * @returns 
- */
-export function throwError(message) {
-  return new Error(message);
-}
-
-/**
- * 
  * @description 更新配置，分包注入chunk
  */
 export function updateConfig() {
@@ -66,9 +56,11 @@ export function getFileType() {
  * @description 处理路径
  * @param p
  * @param suffix
+ * @param filesMap 从文件组中查询
+ * @param collect 收集所有
  * @returns 
  */
-export function resolvePath(p: string, suffix: string, filesMap?): string {
+export function resolvePath(p: string, suffix: string, filesMap?): any {
   const platformEnv = process.env.PLATFORM_ENV || process.env.TARO_ENV;
   const modeEnv = process.env.MODE_ENV;
   const types = [platformEnv];
@@ -78,10 +70,8 @@ export function resolvePath(p: string, suffix: string, filesMap?): string {
   }
   // 检查文件是否存在，兼容传入tempFiles的模式
   const checkFileIsExist = (file) => {
-    if (filesMap) {
-      return !!filesMap[file]
-    }
-    return fs.existsSync(file)
+    const isExists = filesMap ? !!filesMap[file] : fs.existsSync(file);
+    return isExists;
   }
   for (let i = 0, len = types.length; i < len; i++) {
     const type = types[i];
@@ -109,7 +99,7 @@ export function resolvePath(p: string, suffix: string, filesMap?): string {
  * 
  * @description 检查是否已经包含主包标记
  * 两种方案：
- * 1、多个分包引用，则放入主包：subRootsLength > 1 || subRoots.includes(MAIN_ROOT)；
+ * 1、多个分包引用，则放入主包：subRoots.length > 1 || subRoots.includes(MAIN_ROOT)；
  * 2、放入各个分包：subRoots.includes(MAIN_ROOT)；
  * @param subRoots 
  * @returns 
@@ -213,29 +203,6 @@ export function getPathAfterMove(from, to, relativePath) {
   };
 }
 
-export function getRelativeByAbsolutePath(to, absolutePath) {
-  return path.relative(to, absolutePath);
-}
-
-/**
- * 
- * @description 移动后的文件修改全局样式的引用 ，主要针对 common.wxss
- * @param param1 
- */
-export async function modifyStyleImportPath({ from, to }) {
-  const ctx = ref.current;
-  const { cssImports, fs: { readFile, writeFile } } = ctx.helper;
-  const fileType = getFileType();
-  const stylePath = resolvePath(to, fileType.style);
-  if (!stylePath) return;
-  const styleData = await readFile(stylePath);
-  const importPaths = cssImports(styleData);
-  await Promise.all(importPaths.map((item) => {
-    const { relativePath } = getPathAfterMove(from, to, item);
-    return writeFile(stylePath, String(styleData).replace(item, relativePath));
-  }));
-}
-
 /**
  * 
  * @description 获取组件移动路径
@@ -253,15 +220,16 @@ export function getComponentMovePath(from, subRoot) {
   return from.replace(sourcePath, toPath);
 }
 
-export function deleteMovedPaths(movePaths) {
+export function deleteMovedPaths() {
   const ctx = ref.current;
+  const { movePathMap } = ctx.subPackagesMap;
   const { sourcePath, outputPath } = ctx.paths;
   const { fs: { remove } } = ctx.helper
   // 存在则删除
   const fileType = getFileType();
-  movePaths.forEach(([from]) => {
+  Object.keys(movePathMap).forEach((from) => {
     Object.keys(fileType).forEach(key => {
-      const outputPathExt = resolvePath(from.replace(sourcePath, outputPath), fileType[key]);
+      const outputPathExt = resolvePath(removeFileSuffix(from.replace(sourcePath, outputPath)), fileType[key]);
       if (outputPathExt) {
         remove(outputPathExt);
       }
@@ -309,21 +277,18 @@ export function formatSubPackages(tempFiles) {
   const fileType = fileTypeMap[PLATFORM_ENV];
   if (!fileType || !subPackages || subPackages.length === 0) return {};
 
-  const movePaths = []; // 分包列表
   const preloadRuleMap = {}; // 预下载配置
   const subRootMap = {}; // 分包配置
   const subPackagesFormatted = subPackages.map(({ preloadRule, network, root: sourceRoot, pages, outputRoot, ...subItem }, index) => {
     // 保证分包只有一级
-    const { subRoot, outputPrefix, sourcePrefix } = createSubRoot({ outputRoot, sourceRoot }, index);
+    const { subRoot, sourcePrefix } = createSubRoot({ outputRoot, sourceRoot }, index);
     // 收集需要移动的分包列表
     const pagesFormatted = pages.map(item => {
       const page = sourcePrefix + item;
       const from = path.resolve(sourcePath, `./${page}`);
-      const to = path.resolve(sourcePath, `./${outputPrefix}/${item}`);
-      movePaths.push([from, to]);
-      const { sourcePathExt } = getSourceExtPath(from, tempFiles);
+      const { sourcePathExt } = getTempFilesExtPath(from, tempFiles);
       if (sourcePathExt) {
-        subRootMap[sourcePathExt] = subRoot;
+        subRootMap[sourcePathExt] = { subRoot, from };
       }
       return page;
     });
@@ -347,8 +312,7 @@ export function formatSubPackages(tempFiles) {
 
   return {
     subRootMap,
-    movePaths,
-    preloadRule: preloadRuleMap,
+    preloadRule: Object.keys(preloadRuleMap).length ? preloadRuleMap : null,
     subPackages: subPackagesFormatted
   }
 }
@@ -367,11 +331,11 @@ export function collectComponentMapPreset(tempFiles, subRootMap) {
     const { type, config } = tempFiles[item] || {};
     const { usingComponents } = config || {};
     if (!usingComponents || type === 'ENTRY') return;
-    const subRoot = subRootMap[item] || MAIN_ROOT;
+    const { subRoot = MAIN_ROOT } = subRootMap[item] || {};
     const parentAbsolutePath = getAbsoluteByRelativePath(item, "./");
     Object.keys(usingComponents).forEach(name => {
       const relativePath = usingComponents[name];
-      let absolutePath = getAbsoluteByRelativePath(item, relativePath);
+      let { sourcePathExt: absolutePath } = getTempFilesExtPath(getAbsoluteByRelativePath(item, relativePath), tempFiles);
       let currentCom = componentMapPreset[absolutePath];
       const parentCom = componentMapPreset[parentAbsolutePath];
       if (!currentCom) {
@@ -455,61 +419,25 @@ export function deleteSomeKeys(keys, ...dataMap) {
   });
 }
 
-
-/**
- * 
- * @description 修正组件引用关系
- * @param componentMap
- */
-function fixComponentMap(componentMap) {
-  const ctx = ref.current;
-  const { movePaths } = ctx.subPackagesMap || {};
-  if (!movePaths) return;
-  const deleteKeys = [];
-  Object.keys(componentMap).forEach(key => {
-    let { subRoots } = componentMap[key];
-    const [from] = movePaths.find(([, to]) => to === key) || [];
-    const { subRoots: fromSubRoots } = componentMap[from] || {};
-    if (fromSubRoots) {
-      // 已经在分包组中，则
-      componentMap[from].subRoots = mergeSubRoots(fromSubRoots, subRoots);
-      deleteKeys.push(key);
-    }
-  });
-  deleteSomeKeys(deleteKeys, componentMap);
-}
-
 /**
  * 
  * @description 收集移动路径，移出或者回退的路径
  * @param componentMap 
  * @returns 
  */
-export function collectMovePaths(componentMap) {
-  // 需要移回的自定义组件 
-  const componentBackPaths = [];
-  // 将自定义组件移入移动的列表
-  const componentMovePaths = [];
-  fixComponentMap(componentMap);
-  Object
-    .keys(componentMap).forEach(key => {
-      const { subRoots } = componentMap[key];
-      if (!subRoots || subRoots.length === 0) return;
-      const move = !checkHasMainRoot(subRoots);
-      componentMap[key].move = move;
-      // 可支持注入多个分包
-      const paths = subRoots
-        .filter(item => item !== MAIN_ROOT)
-        .map(item => ([key, getComponentMovePath(key, item)]));
-      move
-        ? componentMovePaths.push(...paths)
-        : componentBackPaths.push(...paths.map(item => ([...item].reverse())));
-    });
+export function collectMovePathMap({ subRootMap, componentMap }) {
+  const movePathMap = {};
+  const mergeMap = { ...subRootMap, ...componentMap };
+  Object.keys(mergeMap).forEach(key => {
+    const item = mergeMap[key];
+    const { subRoot, subRoots = [subRoot] } = item;
+    const move = !checkHasMainRoot(subRoots);
+    if (move) {
+      movePathMap[key] = subRoots
+    }
+  });
 
-  return {
-    componentMovePaths,
-    componentBackPaths
-  }
+  return { movePathMap }
 }
 
 /**
@@ -519,7 +447,7 @@ export function collectMovePaths(componentMap) {
  * @param tempFiles 
  * @returns 
  */
-export function getSourceExtPath(from, tempFiles) {
+export function getTempFilesExtPath(from, tempFiles) {
   const ctx = ref.current;
   const { JS_EXT, TS_EXT } = ctx.helper;
   const list = [...JS_EXT, ...TS_EXT];
@@ -548,4 +476,44 @@ export function getAssetsExtPaths(from, assets) {
     const assetsPathExt = resolvePath(from, suffix, assets);
     return assetsPathExt ? [assetsPathExt, suffix] : null
   }).filter(item => item);
+}
+
+/**
+ * 
+ * @description 循环遍历 movePathMap
+ * @param callback 
+ */
+export function loopTraversalMovePathMap(callback) {
+  const ctx = ref.current;
+  const { movePathMap } = ctx.subPackagesMap;
+  if (!movePathMap) return;
+  Object.keys(movePathMap).forEach(from => {
+    const subRoots = movePathMap[from];
+    subRoots.forEach(subRoot => {
+      const to = getComponentMovePath(from, subRoot);
+      callback({ from, to });
+    });
+  });
+}
+
+
+/**
+ * 
+ * @description 根据 tempFilesPath 获取 编译文件列表（fileType所有后缀组合）
+ * @param tempFilesPath 
+ */
+export function getAssetsPathByTempFilesPath(from, assets) {
+  return getAssetsExtPaths(getPureAssetsPath(from), assets);
+};
+
+/**
+ * 
+ * @description 获取纯路径
+ * @param path 
+ * @returns 
+ */
+export function getPureAssetsPath(path) {
+  const ctx = ref.current;
+  const { sourcePath } = ctx.paths;
+  return removeFileSuffix(path).replace(sourcePath + "/", "")
 }

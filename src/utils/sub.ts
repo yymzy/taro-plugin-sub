@@ -1,5 +1,14 @@
 import ora from "ora";
-import { formatSubPackages, collectMovePaths, createOraText, deleteMovedPaths, ref, collectComponentMapPreset, collectComponentMap, deleteSomeKeys, getSourceExtPath, getPathAfterMove, getAssetsExtPaths } from "utils";
+import {
+    collectComponentMapPreset, collectMovePathMap, collectComponentMap, createOraText,
+    deleteSomeKeys, deleteMovedPaths,
+    formatSubPackages,
+    getAssetsPathByTempFilesPath, getPureAssetsPath,
+    loopTraversalMovePathMap,
+    ref,
+    getPathAfterMove,
+    getTempFilesExtPath,
+} from "utils";
 
 /**
  * 
@@ -16,37 +25,39 @@ export function modifyBuildTempFileContent(tempFiles) {
             pages: config.pages,
             subPackages: config.subPackages
         }
-        const { subPackages, preloadRule, movePaths: pageMovePaths, subRootMap } = formatSubPackages(tempFiles);
+        const { subPackages, preloadRule, subRootMap } = formatSubPackages(tempFiles);
+        if (!subPackages) return;
+        if (preloadRule) {
+            config.preloadRule = preloadRule;
+        }
         config.subPackages = subPackages;
-        config.preloadRule = preloadRule;
         ctx.subPackagesMap = {
             subPackages,
             preloadRule,
-            pageMovePaths,
             subRootMap // 子包根页面所属分包集合
         }
     }
-    const { pageMovePaths, subRootMap } = ctx.subPackagesMap || {};
+    const { subRootMap } = ctx.subPackagesMap || {};
     // 这里仅做收集，编译完成后统一处理
     if (subRootMap) {
         const oraText = createOraText("collect");
         const spinner = ora().start(oraText.start());
+
+        // 复原tempFiles
+        restoreTempFiles(tempFiles);
+
         // 收集对应的自定义组件信息
         const componentMapPreset = collectComponentMapPreset(tempFiles, subRootMap);
         const componentMap = collectComponentMap(componentMapPreset);
-        console.log("componentMap", componentMap);
-        const { componentBackPaths, componentMovePaths } = collectMovePaths(componentMap);
-        const movePaths = [...pageMovePaths, ...componentMovePaths];
+        const { movePathMap } = collectMovePathMap({ subRootMap, componentMap });
         ctx.subPackagesMap = {
             ...ctx.subPackagesMap,
-            movePaths,
-            componentBackPaths,
-            componentMap
+            componentMap,
+            movePathMap
         };
         spinner.succeed(oraText.succeed());
         // 修正组件引用路径
-        fixComponentsAndStylePath(componentBackPaths, tempFiles, true);
-        fixComponentsAndStylePath(movePaths, tempFiles);
+        fixComponentsPath(tempFiles);
     }
 }
 
@@ -57,38 +68,33 @@ export function modifyBuildTempFileContent(tempFiles) {
  */
 export function modifyBuildAssets(assets) {
     const ctx = ref.current;
-    const { sourcePath } = ctx.paths;
-    const { movePaths: componentMovePaths = [], componentBackPaths = [] } = ctx.subPackagesMap || {};
-    const movePaths = [...componentMovePaths, ...componentBackPaths];
-    if (!movePaths.length) return;
-    // 加上后缀
-    const movePathsPure = movePaths.map(item => item.map(item => item.replace(sourcePath + "/", "")));
+    const { subRootMap } = ctx.subPackagesMap;
     const deleteKeys = [];
-    movePathsPure.forEach(([from, to]) => {
-        getAssetsExtPaths(from, assets).forEach(([assetsPathExt, suffix]) => {
-            assets[to + suffix] = assets[assetsPathExt];
-            deleteKeys.push(assetsPathExt);
+    loopTraversalMovePathMap(({ from: fromHasSuffix, to }) => {
+        const { from = fromHasSuffix } = subRootMap[fromHasSuffix] || {};
+        const assetsPath = getAssetsPathByTempFilesPath(from, assets);
+        assetsPath.forEach(([file, suffix]) => {
+            assets[getPureAssetsPath(to) + suffix] = assets[file];
+            deleteKeys.push(file);
         });
     });
     deleteSomeKeys(deleteKeys, assets);
     // 删除移动的文件
-    deleteMovedPaths(movePaths);
+    deleteMovedPaths();
 }
 
 /**
  * 
  * @description 移入主包后修正引用的组件路径
  */
-function fixComponentsAndStylePath(movePaths, tempFiles, isBack = false) {
+function fixComponentsPath(tempFiles) {
     const deleteKeys = [];
-    movePaths.forEach(([from, to]) => {
-        const { sourcePathExt, suffix } = getSourceExtPath(from, tempFiles);
-        if (sourcePathExt) {
-            const itemInfo = tempFiles[sourcePathExt]
-            tempFiles[to + suffix] = itemInfo;
-            fixUsingComponents(itemInfo, { from, to, isBack });
-            deleteKeys.push(sourcePathExt);
-        }
+    loopTraversalMovePathMap(({ from, to }) => {
+        const itemInfo = tempFiles[from];
+        if (!itemInfo) return;
+        tempFiles[to] = itemInfo;
+        deleteKeys.push(from);
+        fixUsingComponentsPath(itemInfo, { from, to, tempFiles });
     });
     // 删除已经移动的文件模板
     deleteSomeKeys(deleteKeys, tempFiles);
@@ -96,27 +102,53 @@ function fixComponentsAndStylePath(movePaths, tempFiles, isBack = false) {
 
 /**
  * 
- * @description 修正自定义组件的引用路径
+ * @description 修正自定义组件引用路径
  * @param itemInfo 
+ * @returns 
  */
-function fixUsingComponents(itemInfo, opts) {
+function fixUsingComponentsPath(itemInfo, opts) {
+    const ctx = ref.current;
+    const { movePathMap } = ctx.subPackagesMap;
     const { config: { usingComponents } = {} as any } = itemInfo || {};
     if (!usingComponents) return;
-    const { from, to, isBack } = opts;
-    const ctx = ref.current;
-    const { componentMap } = ctx.subPackagesMap || {}
+    const { from, to, tempFiles, isBack = false } = opts;
     Object.keys(usingComponents).forEach(name => {
-        const relativePath = usingComponents[name]; // 相对路径 ../../components/sub/index.wkd;
-        const {
-            absolutePath,
-            relativePath: relativePathMoved
-        } = getPathAfterMove(from, to, relativePath);
-        const { move = false } = componentMap[absolutePath] || {};
-        // 返回主包时不应该修改同步跟随移动过来的包；
-        if (isBack ? move : !move) {
-            // 说明此组件未移入子包，需要更改引入路径
-            usingComponents[name] = relativePathMoved;
+        const relativePath = usingComponents[name];
+        const { absolutePath, relativePath: relativePathMoved } = getPathAfterMove(from, to, relativePath);
+        const move = !!movePathMap[getTempFilesExtPath(absolutePath, tempFiles).sourcePathExt];
+
+        console.log('relativePathMoved', relativePathMoved);
+        console.log("absolutePath", absolutePath);
+        console.log("move", move);
+        if (move) return;
+        if (isBack && !move) return;
+        usingComponents[name] = relativePathMoved;
+    });
+}
+
+/**
+ * 
+ * @description 将移动过的 tempFiles 复原
+ * @param tempFiles 
+ * @returns 
+ */
+function restoreTempFiles(tempFiles) {
+    const deleteKeys = [];
+    loopTraversalMovePathMap(({ from, to }) => {
+        const itemInfo = tempFiles[to];
+        if (itemInfo) {
+            // 需要回退
+            if (!tempFiles[from]) {
+                // 多文件回退的，回退一次即可；其他文件直接移除
+                tempFiles[from] = itemInfo;
+                console.log("from", from);
+                console.log("to", to);
+                console.log("itemInfo-1", itemInfo.config.usingComponents);
+                fixUsingComponentsPath(itemInfo, { from: to, to: from, tempFiles, isBack: true });
+                console.log("itemInfo-2", itemInfo.config.usingComponents);
+            }
+            deleteKeys.push(to);
         }
     });
-
+    deleteSomeKeys(deleteKeys, tempFiles);
 }
