@@ -66,7 +66,8 @@ export function modifyBuildTempFileContent(tempFiles) {
  */
 export function modifyBuildAssets(assets) {
     const ctx = ref.current;
-    const { subRootMap } = ctx.subPackagesMap;
+    const { subRootMap } = ctx.subPackagesMap || {};
+    if(!subRootMap) return;
     const deleteKeys = [];
     loopTraversalMovePathMap(({ from: fromHasSuffix, to }) => {
         const { from = fromHasSuffix } = subRootMap[fromHasSuffix] || {};
