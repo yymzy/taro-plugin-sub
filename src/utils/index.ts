@@ -99,13 +99,13 @@ export function resolvePath(p: string, suffix: string, filesMap?): any {
  * 
  * @description 检查是否已经包含主包标记
  * 两种方案：
- * 1、多个分包引用，则放入主包：subRoots.length > 1 || subRoots.includes(MAIN_ROOT)；
+ * 1、多个分包引用，则放入主包：subRoots.includes(MAIN_ROOT) || subRoots.length > 1 ；
  * 2、放入各个分包：subRoots.includes(MAIN_ROOT)；
  * @param subRoots 
  * @returns 
  */
 export function checkHasMainRoot(subRoots) {
-  return subRoots && (subRoots.includes(MAIN_ROOT));
+  return subRoots && (subRoots.includes(MAIN_ROOT) || subRoots.length > 1);
 }
 
 /**
@@ -332,7 +332,7 @@ export function collectComponentMapPreset(tempFiles, subRootMap) {
     const { usingComponents } = config || {};
     if (!usingComponents || type === 'ENTRY') return;
     const { subRoot = MAIN_ROOT } = subRootMap[item] || {};
-    const parentAbsolutePath = getAbsoluteByRelativePath(item, "./");
+    const { sourcePathExt: parentAbsolutePath } = getTempFilesExtPath(getAbsoluteByRelativePath(item, "./"), tempFiles);
     Object.keys(usingComponents).forEach(name => {
       const relativePath = usingComponents[name];
       let { sourcePathExt: absolutePath } = getTempFilesExtPath(getAbsoluteByRelativePath(item, relativePath), tempFiles);
@@ -430,7 +430,7 @@ export function collectMovePathMap({ subRootMap, componentMap }) {
   const mergeMap = { ...subRootMap, ...componentMap };
   Object.keys(mergeMap).forEach(key => {
     const item = mergeMap[key];
-    const { subRoot, subRoots = [subRoot] } = item;
+    const { subRoot = MAIN_ROOT, subRoots = [subRoot] } = item;
     const move = !checkHasMainRoot(subRoots);
     if (move) {
       movePathMap[key] = subRoots

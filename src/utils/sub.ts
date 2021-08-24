@@ -42,10 +42,8 @@ export function modifyBuildTempFileContent(tempFiles) {
     if (subRootMap) {
         const oraText = createOraText("collect");
         const spinner = ora().start(oraText.start());
-
         // 复原tempFiles
         restoreTempFiles(tempFiles);
-
         // 收集对应的自定义组件信息
         const componentMapPreset = collectComponentMapPreset(tempFiles, subRootMap);
         const componentMap = collectComponentMap(componentMapPreset);
@@ -89,13 +87,17 @@ export function modifyBuildAssets(assets) {
  */
 function fixComponentsPath(tempFiles) {
     const deleteKeys = [];
+    const ctx = ref.current;
+    const movedPathMap = {}
     loopTraversalMovePathMap(({ from, to }) => {
         const itemInfo = tempFiles[from];
         if (!itemInfo) return;
         tempFiles[to] = itemInfo;
+        movedPathMap[to] = true;
         deleteKeys.push(from);
         fixUsingComponentsPath(itemInfo, { from, to, tempFiles });
     });
+    ctx.subPackagesMap.movedPathMap = movedPathMap;
     // 删除已经移动的文件模板
     deleteSomeKeys(deleteKeys, tempFiles);
 }
@@ -108,20 +110,16 @@ function fixComponentsPath(tempFiles) {
  */
 function fixUsingComponentsPath(itemInfo, opts) {
     const ctx = ref.current;
-    const { movePathMap } = ctx.subPackagesMap;
+    const { movePathMap, movedPathMap = {} } = ctx.subPackagesMap;
     const { config: { usingComponents } = {} as any } = itemInfo || {};
     if (!usingComponents) return;
-    const { from, to, tempFiles, isBack = false } = opts;
+    const { from, to, isBack = false, tempFiles } = opts;
     Object.keys(usingComponents).forEach(name => {
         const relativePath = usingComponents[name];
         const { absolutePath, relativePath: relativePathMoved } = getPathAfterMove(from, to, relativePath);
-        const move = !!movePathMap[getTempFilesExtPath(absolutePath, tempFiles).sourcePathExt];
-
-        console.log('relativePathMoved', relativePathMoved);
-        console.log("absolutePath", absolutePath);
-        console.log("move", move);
+        const { sourcePathExt } = getTempFilesExtPath(absolutePath, tempFiles);
+        const move = isBack ? movedPathMap[sourcePathExt] : !!movePathMap[sourcePathExt];
         if (move) return;
-        if (isBack && !move) return;
         usingComponents[name] = relativePathMoved;
     });
 }
@@ -141,11 +139,7 @@ function restoreTempFiles(tempFiles) {
             if (!tempFiles[from]) {
                 // 多文件回退的，回退一次即可；其他文件直接移除
                 tempFiles[from] = itemInfo;
-                console.log("from", from);
-                console.log("to", to);
-                console.log("itemInfo-1", itemInfo.config.usingComponents);
                 fixUsingComponentsPath(itemInfo, { from: to, to: from, tempFiles, isBack: true });
-                console.log("itemInfo-2", itemInfo.config.usingComponents);
             }
             deleteKeys.push(to);
         }
