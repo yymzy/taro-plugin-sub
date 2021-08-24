@@ -1,11 +1,11 @@
-import { emptyCache, updateConfig } from "utils";
-import { mvSubPackages, modifyBuildTempFileContent, renamePagesName } from "../utils/sub";
+import { updateConfig, ref } from "utils";
+import { modifyBuildTempFileContent, modifyBuildAssets } from "../utils/sub";
 
 export default (ctx, opts) => {
 
     ctx.onBuildStart(() => {
-        updateConfig(ctx);
-        emptyCache(ctx);
+        ref.current = ctx;
+        updateConfig();
     });
 
     /**
@@ -36,13 +36,8 @@ export default (ctx, opts) => {
     /**
      * @description 编译过程中分析组件引用
      */
-    ctx.modifyBuildTempFileContent(({ tempFiles }) => modifyBuildTempFileContent(ctx, tempFiles));
+    ctx.modifyBuildTempFileContent(({ tempFiles }) => modifyBuildTempFileContent(tempFiles));
 
-    /**
-     * @description 编译完成
-     */
-    ctx.onBuildFinish(async () => {
-        await renamePagesName(ctx);
-        await mvSubPackages(ctx);
-    });
+    ctx.modifyBuildAssets(({ assets }) => modifyBuildAssets(assets));
+
 };
