@@ -8,6 +8,7 @@ import {
     ref,
     getPathAfterMove,
     getTempFilesExtPath,
+    getTempFilesItem,
 } from "utils";
 
 /**
@@ -19,7 +20,7 @@ export function modifyBuildTempFileContent(tempFiles) {
     const ctx = ref.current;
     const EntryPath = Object.keys(tempFiles).find(key => tempFiles[key].type === 'ENTRY');
     if (!EntryPath) return
-    const { config = {} } = tempFiles[EntryPath] || {};
+    const { config = { } } = tempFiles[EntryPath] || { };
     if (!ctx.appConfig) {
         ctx.appConfig = {
             pages: config.pages,
@@ -37,7 +38,7 @@ export function modifyBuildTempFileContent(tempFiles) {
             subRootMap // 子包根页面所属分包集合
         }
     }
-    const { subRootMap } = ctx.subPackagesMap || {};
+    const { subRootMap } = ctx.subPackagesMap || { };
     // 这里仅做收集，编译完成后统一处理
     if (subRootMap) {
         const oraText = createOraText("collect");
@@ -66,11 +67,11 @@ export function modifyBuildTempFileContent(tempFiles) {
  */
 export function modifyBuildAssets(assets) {
     const ctx = ref.current;
-    const { subRootMap } = ctx.subPackagesMap || {};
-    if(!subRootMap) return;
+    const { subRootMap } = ctx.subPackagesMap || { };
+    if (!subRootMap) return;
     const deleteKeys = [];
     loopTraversalMovePathMap(({ from: fromHasSuffix, to }) => {
-        const { from = fromHasSuffix } = subRootMap[fromHasSuffix] || {};
+        const { from = fromHasSuffix } = subRootMap[fromHasSuffix] || { };
         const assetsPath = getAssetsPathByTempFilesPath(from, assets);
         assetsPath.forEach(([file, suffix]) => {
             assets[getPureAssetsPath(to) + suffix] = assets[file];
@@ -89,9 +90,9 @@ export function modifyBuildAssets(assets) {
 function fixComponentsPath(tempFiles) {
     const deleteKeys = [];
     const ctx = ref.current;
-    const movedPathMap = {}
+    const movedPathMap = { }
     loopTraversalMovePathMap(({ from, to }) => {
-        const itemInfo = tempFiles[from];
+        const itemInfo = getTempFilesItem(tempFiles, from);
         if (!itemInfo) return;
         tempFiles[to] = itemInfo;
         movedPathMap[to] = true;
@@ -111,8 +112,8 @@ function fixComponentsPath(tempFiles) {
  */
 function fixUsingComponentsPath(itemInfo, opts) {
     const ctx = ref.current;
-    const { movePathMap, movedPathMap = {} } = ctx.subPackagesMap;
-    const { config: { usingComponents } = {} as any } = itemInfo || {};
+    const { movePathMap, movedPathMap = { } } = ctx.subPackagesMap;
+    const { config: { usingComponents } = { } as any } = itemInfo || { };
     if (!usingComponents) return;
     const { from, to, isBack = false, tempFiles } = opts;
     Object.keys(usingComponents).forEach(name => {
