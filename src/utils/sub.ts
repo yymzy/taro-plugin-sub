@@ -27,37 +27,35 @@ export function modifyBuildTempFileContent(tempFiles) {
             subPackages: config.subPackages
         }
         const { subPackages, preloadRule, subRootMap } = formatSubPackages(tempFiles);
-        if (!subPackages) return;
-        if (preloadRule) {
-            config.preloadRule = preloadRule;
-        }
-        config.subPackages = subPackages;
         ctx.subPackagesMap = {
             subPackages,
             preloadRule,
             subRootMap // 子包根页面所属分包集合
         }
     }
-    const { subRootMap } = ctx.subPackagesMap || { };
-    // 这里仅做收集，编译完成后统一处理
-    if (subRootMap) {
-        const oraText = createOraText("collect");
-        const spinner = ora().start(oraText.start());
-        // 复原tempFiles
-        restoreTempFiles(tempFiles);
-        // 收集对应的自定义组件信息
-        const componentMapPreset = collectComponentMapPreset(tempFiles, subRootMap);
-        const componentMap = collectComponentMap(componentMapPreset);
-        const { movePathMap } = collectMovePathMap({ subRootMap, componentMap });
-        ctx.subPackagesMap = {
-            ...ctx.subPackagesMap,
-            componentMap,
-            movePathMap
-        };
-        spinner.succeed(oraText.succeed());
-        // 修正组件引用路径
-        fixComponentsPath(tempFiles);
+    const { subRootMap, subPackages, preloadRule } = ctx.subPackagesMap || { };
+    if (!subPackages || !subRootMap) return;
+    if (preloadRule) {
+        config.preloadRule = preloadRule;
     }
+    config.subPackages = subPackages;
+    // 这里仅做收集，编译完成后统一处理
+    const oraText = createOraText("collect");
+    const spinner = ora().start(oraText.start());
+    // 复原tempFiles
+    restoreTempFiles(tempFiles);
+    // 收集对应的自定义组件信息
+    const componentMapPreset = collectComponentMapPreset(tempFiles, subRootMap);
+    const componentMap = collectComponentMap(componentMapPreset);
+    const { movePathMap } = collectMovePathMap({ subRootMap, componentMap });
+    ctx.subPackagesMap = {
+        ...ctx.subPackagesMap,
+        componentMap,
+        movePathMap
+    };
+    spinner.succeed(oraText.succeed());
+    // 修正组件引用路径
+    fixComponentsPath(tempFiles);
 }
 
 /**
