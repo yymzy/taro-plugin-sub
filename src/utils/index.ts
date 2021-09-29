@@ -20,6 +20,18 @@ export const fileTypeMap = {
     style: ".acss",
     config: ".json",
     script: ".js"
+  },
+  swan: {
+    templ: ".swan",
+    style: ".css",
+    config: ".json",
+    script: ".js"
+  },
+  quick: {
+    templ: ".qxml",
+    style: ".css",
+    config: ".json",
+    script: ".js"
   }
 }
 
@@ -148,7 +160,7 @@ function getOraText(status, opts?) {
     succeed: ["完成：", "green"],
     fail: ["失败：", "red"]
   }
-  const { type = "move", isBack, message = "" } = opts || { };
+  const { type = "move", isBack, message = "" } = opts || {};
   let text = ""
   switch (type) {
     case "move":  // 移动文件
@@ -298,10 +310,10 @@ export function formatSubPackages(tempFiles) {
   const { sourcePath } = ctx.paths;
   const { subPackages } = ctx.appConfig;
   const fileType = fileTypeMap[PLATFORM_ENV];
-  if (!fileType || !subPackages || subPackages.length === 0) return { };
+  if (!fileType || !subPackages || subPackages.length === 0) return {};
 
-  const preloadRuleMap = { }; // 预下载配置
-  const subRootMap = { }; // 分包配置
+  const preloadRuleMap = {}; // 预下载配置
+  const subRootMap = {}; // 分包配置
   const subPackagesFormatted = subPackages.map(({ preloadRule, network, root: sourceRoot, pages, outputRoot, ...subItem }, index) => {
     // 保证分包只有一级
     const { subRoot, sourcePrefix } = createSubRoot({ outputRoot, sourceRoot }, index);
@@ -324,7 +336,10 @@ export function formatSubPackages(tempFiles) {
     } else {
       delete subItem.name;
     }
-    collectPreloadRule({ preloadRule, name, network }, preloadRuleMap);
+    const preloadRules = Array.isArray(preloadRule) ? preloadRule : [preloadRule]
+    preloadRules.forEach(preloadRule => {
+      collectPreloadRule({ preloadRule, name, network }, preloadRuleMap);
+    });
 
     return {
       root: subRoot,
@@ -349,12 +364,12 @@ export function formatSubPackages(tempFiles) {
  */
 export function collectComponentMapPreset(tempFiles, subRootMap) {
   // 收集对应的自定义组件信息
-  const componentMapPreset = { };
+  const componentMapPreset = {};
   Object.keys(tempFiles).forEach(item => {
-    const { type, config } = tempFiles[item] || { };
-    const { usingComponents } = config || { };
+    const { type, config } = tempFiles[item] || {};
+    const { usingComponents } = config || {};
     if (!usingComponents || type === 'ENTRY') return;
-    const { subRoot = MAIN_ROOT } = subRootMap[item] || { };
+    const { subRoot = MAIN_ROOT } = subRootMap[item] || {};
     const { sourcePathExt: parentAbsolutePath } = getTempFilesExtPath(getAbsoluteByRelativePath(item, "./"), tempFiles);
     Object.keys(usingComponents).forEach(name => {
       const relativePath = usingComponents[name];
@@ -370,7 +385,7 @@ export function collectComponentMapPreset(tempFiles, subRootMap) {
         // 父级为页面组件直接注入subRoots
         currentCom.subRoots = mergeSubRoots(currentCom.subRoots, [subRoot]);
       } else {
-        const { subRoots: parentSubRoots } = parentCom || { };
+        const { subRoots: parentSubRoots } = parentCom || {};
         if (checkHasMainRoot(parentSubRoots)) {
           // 已经包含主包，则判断一定进入主包，不用再做处理
           currentCom.subRoots = mergeSubRoots(currentCom.subRoots, parentSubRoots);
@@ -390,7 +405,7 @@ export function collectComponentMapPreset(tempFiles, subRootMap) {
  * @param componentMapPreset
  */
 function loopFindSubRoots(componentMapPreset, sourcePathExt, preSubRoots = null) {
-  const { subRoots, parents } = componentMapPreset[sourcePathExt] || { }; // 当前subRoots
+  const { subRoots, parents } = componentMapPreset[sourcePathExt] || {}; // 当前subRoots
   const subRootsMerged = mergeSubRoots(preSubRoots, subRoots);  // 合并上一个与当前的subRoots
   const parentsLength = parents ? parents.length : 0;
 
@@ -412,11 +427,11 @@ function loopFindSubRoots(componentMapPreset, sourcePathExt, preSubRoots = null)
  * @returns 
  */
 export function collectComponentMap(componentMapPreset) {
-  const componentMap = { }
+  const componentMap = {}
   // 收集subRoots
   Object.keys(componentMapPreset).forEach(sourcePathExt => {
     if (!componentMap[sourcePathExt]) {
-      componentMap[sourcePathExt] = { };
+      componentMap[sourcePathExt] = {};
     }
     const subRoots = loopFindSubRoots(componentMapPreset, sourcePathExt);
     if (subRoots) {
@@ -449,7 +464,7 @@ export function deleteSomeKeys(keys, ...dataMap) {
  * @returns 
  */
 export function collectMovePathMap({ subRootMap, componentMap }) {
-  const movePathMap = { };
+  const movePathMap = {};
   const mergeMap = { ...subRootMap, ...componentMap };
   Object.keys(mergeMap).forEach(key => {
     const item = mergeMap[key];
