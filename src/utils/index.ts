@@ -121,9 +121,7 @@ export function resolvePath(p: string, suffix: string, filesMap?): any {
 /**
  * 
  * @description 检查是否已经包含主包标记
- * 两种方案：
- * 1、多个分包引用，则放入主包：subRoots.includes(MAIN_ROOT) || subRoots.length > 1 ；
- * 2、放入各个分包：subRoots.includes(MAIN_ROOT)；
+ * 多个分包引用，则放入主包：subRoots.includes(MAIN_ROOT) || subRoots.length > 1 ；
  * @param subRoots 
  * @returns 
  */
